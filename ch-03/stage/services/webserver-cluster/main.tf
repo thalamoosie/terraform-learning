@@ -2,57 +2,33 @@ provider "aws" {
   region = "us-east-2"
 }
 
-variable "server_port" {
-  description = "The port the server will use for HTTP requests"
-  type        = number
-  default     = 8080
+resource "aws_launch_configuration" "example" {
+  name_prefix     = "terraform-example-"
+  image_id        = "ami-0fb653ca2d3203ac1"
+  instance_type   = "t2.micro"
+  security_groups = [aws_security_group.instance.id]
+  user_data = templatefile("user-data.sh", {
+    server_port = var.server_port
+    db_address  = data.terraform_remote_state.db.outputs.address
+    db_port     = data.terraform_remote_state.db.outputs.port
+  })
+  # user_data = base64encode(<<-EOF
+  #   #!/bin/bash
+  #   echo "Hello, World!" > index.html
+  #   echo "${data.terraform_remote_state.db.outputs.address}" >> index.html
+  #   echo "${data.terraform_remote_state.db.outputs.port}" >> index.html
+  #   nohup busybox httpd -f -p ${var.server_port} &
+  #   EOF
+  # )
+
+  lifecycle {
+    create_before_destroy = true
+  }
 }
-
-# resource "aws_launch_configuration" "example" {
-#   image_id        = "ami-0fb653ca2d3203ac1"
-#   instance_type   = "t2.micro"
-#   security_groups = [aws_security_group.instance.id]
-
-#   lifecycle {
-#     create_before_destroy = true
-#   }
-
-#   user_data = <<-EOF
-#             #!/bin/bash
-#             echo "Hello, World!" > index.html
-#             nohup busybox httpd -f -p ${var.server_port} &
-#             EOF
-
-# }
-resource "aws_launch_template" "example" {
-  name_prefix            = "terraform-example-"
-  image_id               = "ami-0fb653ca2d3203ac1"
-  instance_type          = "t2.micro"
-  vpc_security_group_ids = [aws_security_group.instance.id]
-  user_data = base64encode(<<-EOF
-    #!/bin/bash
-    echo "Hello, World!" > index.html
-    nohup busybox httpd -f -p ${var.server_port} &
-    EOF
-  )
-}
-
-# resource "aws_instance" "example" {
-#   ami                    = "ami-0fb653ca2d3203ac1"
-#   instance_type          = "t2.micro"
-#   vpc_security_group_ids = [aws_security_group.instance.id]
-
-
-#   user_data_replace_on_change = true
-
-#   tags = {
-#     Name = "terraform-example"
-#   }
-# }
 
 resource "aws_autoscaling_group" "example" {
   launch_template {
-    id      = aws_launch_template.example.id
+    id      = aws_launch_configuration.example.name
     version = "$Latest"
   }
   vpc_zone_identifier = data.aws_subnets.default.ids
@@ -78,11 +54,6 @@ resource "aws_security_group" "instance" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 }
-
-# output "public_ip" {
-#   value       = aws_instance.example.public_ip
-#   description = "The public IP address of the webserver"
-# }
 
 resource "aws_lb" "example" {
   name               = "terraform-asg-example"
@@ -168,18 +139,22 @@ resource "aws_lb_target_group" "asg" {
   }
 }
 
-data "aws_vpc" "default" {
-  default = true
-}
+data "terraform_remote_state" "db" {
+  backend = "s3"
 
-data "aws_subnets" "default" {
-  filter {
-    name   = "vpc-id"
-    values = [data.aws_vpc.default.id]
+  config = {
+    bucket = "terraform-up-and-running-state-apz-2025-01"
+    key    = "stage/data-stores/mysql/terraform.tfstate"
+    region = "us-east-2"
   }
 }
 
-output "alb_dns_name" {
-  value       = aws_lb.example.dns_name
-  description = "The domain name of the load balancer"
+terraform {
+  backend "s3" {
+    # bucket         = "terraform-up-and-running-state-apz-2025-01"
+    key = "stage/services/webserver-cluster/terraform.tfstate"
+    # region         = "us-east-2"
+    # dynamodb_table = "terraform-up-and-running-locks"
+    # encrypt        = true
+  }
 }
